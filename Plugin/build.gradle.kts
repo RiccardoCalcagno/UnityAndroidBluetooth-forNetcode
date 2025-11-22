@@ -3,7 +3,7 @@ plugins {
 }
 
 android {
-    namespace = "com.relaxinvr.bluetooth"
+    namespace = "com.example.bluetooth"
     compileSdk {
         version = release(34)
     }

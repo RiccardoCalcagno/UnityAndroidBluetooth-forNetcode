@@ -1,7 +1,8 @@
 // File: BluetoothPlugin.java
-package com.relaxinvr.bluetooth;
+package com.example.bluetooth;
 
 import android.bluetooth.*;
+import android.os.Debug;
 import android.util.Log;
 import android.Manifest;
 import androidx.annotation.RequiresPermission;
@@ -9,7 +10,6 @@ import androidx.annotation.RequiresPermission;
 import java.io.*;
 import java.util.*;
 import java.util.concurrent.*;
-import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.UUID;
 
@@ -29,12 +29,18 @@ public class BluetoothPlugin {
         final BlockingQueue<byte[]> incoming;
         final BufferedInputStream inStream;
         final BufferedOutputStream outStream;
+
+        final int id;
         final byte[] lenBuf = new byte[4];
         volatile boolean closed = false;
 
 
-        Connection(BluetoothSocket s) throws IOException {
+        Connection(BluetoothSocket s, int id) throws IOException {
             this.socket = s;
+            this.id = id;
+            if(id <=0){
+                throw new IOException("Id should be grater than zero");
+            }
             // capacity limit: usare la variabile maxOutgoingQueue come riferimento
             int cap = Math.max(16, maxOutgoingQueue); // fallback minimo
             this.incoming = new LinkedBlockingQueue<>(cap);
@@ -113,6 +119,7 @@ public class BluetoothPlugin {
 
         void closeQuiet() {
             if (closed) return;
+            notifyUnityIncomingConnection(-this.id);
             closed = true;
             try { inStream.close(); } catch (Exception ignored) {}
             try { outStream.close(); } catch (Exception ignored) {}
@@ -143,6 +150,7 @@ public class BluetoothPlugin {
 
 
     private static void notifyUnityIncomingConnection(int connId) {
+        Log.d(TAG, "call to notifyUnityIncomingConnection with: "+connId+", there are callbacks= "+(unityObject != null && unityMethod != null));
         if (unityObject == null || unityMethod == null) return;
         sendMessageToUnity(unityObject, unityMethod, Integer.toString(connId));
     }
@@ -178,7 +186,7 @@ public class BluetoothPlugin {
                     BluetoothSocket s = serverSocket.accept();
                     if (s != null) {
                         int id = nextConnId.getAndIncrement();
-                        Connection c = new Connection(s);
+                        Connection c = new Connection(s, id);
                         connections.put(id, c);
 
                         Log.d(TAG, "Accepted new incoming connection id=" + id + " from device=" + s.getRemoteDevice().getName() + " [" + s.getRemoteDevice().getAddress() + "]");
@@ -371,7 +379,7 @@ public class BluetoothPlugin {
         if (s == null) return -1;
         int id = nextConnId.getAndIncrement();
         try {
-            Connection c = new Connection(s);
+            Connection c = new Connection(s, id);
             connections.put(id, c);
             estimatedBandwidthMap.put(id, estimateBandwidth(s));
             notifyUnityIncomingConnection(id);

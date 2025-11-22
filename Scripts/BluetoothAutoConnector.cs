@@ -21,27 +21,27 @@
  * SOFTWARE.
  */
 
-
-using UnityEngine;
-using System.Collections;
-using Unity.Netcode;
-using System.Text;
-using UnityEngine.Android;
-using System.Threading.Tasks;
 using System;
+using System.Collections;
+using System.Text;
+using System.Threading.Tasks;
+using Unity.Netcode;
+using Unity.Services.Qos.V2.Models;
+using UnityEngine;
+using UnityEngine.Android;
 
 #if UNITY_ANDROID && !UNITY_EDITOR
 using Unity.VisualScripting;
 using Unity.Netcode.Transports.UTP;
-using System.Collections.Generic;
-using brab.bluetooth;
+using System.Collections.Generic; 
 using System.IO;
 #endif
 
-public class BluetoothAutoConnector: MonoBehaviour {
+public class BluetoothAutoConnector : MonoBehaviour
+{
 
-    const string HANDSHAKE_REQ = "Buongiorno_SeiDisponibile?";
-    const string HANDSHAKE_ACK = "Certamente_Connettiamoci";
+    const string HANDSHAKE_REQ = "BuongiornoRelaxinVR_0";
+    const string HANDSHAKE_ACK = "BuongiornoRelaxinVR_1";
     const string serviceUUID = "00001101-0000-1000-8000-00805f9b34fb";
 
     public event Action OnConnectionEstablished;
@@ -51,11 +51,12 @@ public class BluetoothAutoConnector: MonoBehaviour {
     private int lastIncoming;
     private Coroutine listener, scanner;
     private BluetoothAutoConnector instance;
-
+    private BluetoothTransport currentTransport;
+    private bool isServer;
 
     public void Awake()
     {
-        if(instance != null)
+        if (instance != null)
         {
             Destroy(this);
         }
@@ -88,22 +89,37 @@ public class BluetoothAutoConnector: MonoBehaviour {
                 1 // request code
             ); 
         }
+        BluetoothServerWrapper.LoadPlugin();
 #endif
 
         return this;
     }
-     
+
 
     // ADD METHOD (Unity callback)
     public void OnIncomingConnection(string idStr)
     {
         if (int.TryParse(idStr, out int id))
-            lastIncoming = id;
+        {
+            if (id < 0)
+            {
+                if (currentTransport != null && currentTransport.connectionId == -id)
+                {
+                    currentTransport.DisposeConnection(-id);
+                }
+            }
+            else
+            {
+                lastIncoming = id;
+            }
+        }
     }
 
-    public void Initialize(bool isServer)
-    { 
+    public void Initialize(bool _isServer)
+    {
+        isServer = _isServer;
         lastIncoming = -1;
+        StopCoroutines();
         if (isServer)
         {
             listener = StartCoroutine(RunBluetoothListener());
@@ -114,6 +130,11 @@ public class BluetoothAutoConnector: MonoBehaviour {
 
     private void OnDestroy()
     {
+        StopCoroutines();
+    }
+
+    private void StopCoroutines()
+    {
         if (listener != null)
         {
             StopCoroutine(listener);
@@ -123,18 +144,18 @@ public class BluetoothAutoConnector: MonoBehaviour {
             StopCoroutine(scanner);
         }
     }
-      
+
     IEnumerator RunBluetoothListener()
-    { 
+    {
         BluetoothServerWrapper.StartServer("RelaxinVR", serviceUUID);
-         
+
         while (true)
         {
             yield return new WaitUntil(() => lastIncoming != -1);
 
             int cid = lastIncoming;
-            lastIncoming = -1;  
-             
+            lastIncoming = -1;
+
             float timeout = 5f;
             float t = 0f;
             byte[] buf = null;
@@ -147,18 +168,20 @@ public class BluetoothAutoConnector: MonoBehaviour {
 
             if (buf != null)
             {
-                string msg = Encoding.UTF8.GetString(buf); 
+                string msg = Encoding.UTF8.GetString(buf);
                 if (msg == HANDSHAKE_REQ)
                 {
                     var wasSent = BluetoothServerWrapper.WriteMessage(cid, Encoding.UTF8.GetBytes(HANDSHAKE_ACK));
                     if (!wasSent)
                     {
                         Debug.LogWarning("[BT] FutureHost ⇒ handshake ack could not be sent");
-                    } 
-                    yield return SetupTransportAsHost(cid);
+                    }
+                    yield return SetupTransport(cid, true);
                     yield break;
                 }
             }
+
+            Debug.Log("[BT] Handshake failed for incoming connection " + cid + " -> closing.");
 
             BluetoothServerWrapper.CloseConnection(cid);
             yield return null;
@@ -207,7 +230,7 @@ public class BluetoothAutoConnector: MonoBehaviour {
                     yield return null;
                     continue;
                 }
-                 
+
 
                 // Perform handshake (length-prefixed frames already handled by plugin)
                 byte[] req = Encoding.UTF8.GetBytes(HANDSHAKE_REQ);
@@ -246,8 +269,8 @@ public class BluetoothAutoConnector: MonoBehaviour {
                 }
 
                 if (gotAck)
-                { 
-                    yield return SetupTransportAsClient(cid);
+                {
+                    yield return SetupTransport(cid, false);
                     yield break;
                 }
                 else
@@ -261,88 +284,68 @@ public class BluetoothAutoConnector: MonoBehaviour {
 
             // No connection established; wait then loop again
             yield return new WaitForSeconds(2f);
-        } 
+        }
     }
 
-    IEnumerator SetupTransportAsHost(int connId)
+
+    private IEnumerator SetupTransport(int connId, bool isHost)
     {
         connectionId = connId;
         var net = Unity.Netcode.NetworkManager.Singleton;
-
-        // Se il NetworkManager è già in esecuzione (host già attivo), non fare shutdown:
         if (net.IsListening || net.IsServer || net.IsClient)
         {
-            var existingTransport = net.NetworkConfig.NetworkTransport as BluetoothTransport;
-            if (existingTransport != null)
+            currentTransport = net.NetworkConfig.NetworkTransport as BluetoothTransport;
+            if (currentTransport != null)
             {
-                // Reassocia semplicemente la nuova connessione al BT transport già in uso
-                existingTransport.OverrideExistingConnection(connectionId, 1UL);
-                Debug.Log("[BT] Host già attivo → reassociated existing transport to connId=" + connectionId);
-                OnConnectionEstablished?.Invoke();
-                yield break;
+                bool canReuse =
+                    (isHost && net.IsServer) ||
+                    (!isHost && net.IsClient);
+
+                if (canReuse)
+                {
+                    currentTransport.OnClientDisconnected += Bt_OnClientDisconnected;
+                    currentTransport.OverrideExistingConnection(
+                        connectionId,
+                        isHost ? 1UL : 0UL
+                    );
+                    OnConnectionEstablished?.Invoke();
+                    yield break;
+                }
+                // fallback → restart
             }
-            // fallback: se non è un BluetoothTransport, continua con comportamento "restart" (vecchio)
         }
-
         if (net.IsListening || net.IsServer || net.IsClient)
         {
-            NetworkManager.Singleton.Shutdown();
-        }
-        while (net.IsListening || net.IsServer || net.IsClient)
-            yield return null; 
-         
-        foreach(var ut in NetworkManager.Singleton.gameObject.GetComponents<NetworkTransport>())
-            Destroy(ut);
-
-        var bt = gameObject.AddComponent<BluetoothTransport>();
-
-        bt.OverrideExistingConnection(connectionId, 1);
-         
-        net.NetworkConfig.NetworkTransport = bt;
-        // Since this device accepted a connection, start as host (server+client)
-
-        net.StartHost(); 
-
-        OnConnectionEstablished?.Invoke();
-    }
-
-    IEnumerator SetupTransportAsClient(int connId)
-    {
-        connectionId = connId;
-        var net = Unity.Netcode.NetworkManager.Singleton;
-        // se disponibile, passa indirizzo/uuid per permettere reconnessione lato transport
-
-        if (net.IsListening || net.IsServer || net.IsClient)
-        {
-            var existingTransport = net.NetworkConfig.NetworkTransport as BluetoothTransport;
-            if (existingTransport != null && net.IsClient)
-            {
-                existingTransport.OverrideExistingConnection(connectionId, 0UL); 
-                Debug.Log("[BT] Client già attivo → reassociated existing transport to connId=" + connectionId);
-                OnConnectionEstablished?.Invoke();
-                yield break;
-            }
-            // fallback al comportamento originale (restart)
-        }
-
-        if (net.IsListening || net.IsServer || net.IsClient)
-        {
-            NetworkManager.Singleton.Shutdown();
+            net.Shutdown();
         }
         while (net.IsListening || net.IsServer || net.IsClient)
             yield return null;
-
-        foreach (var ut in NetworkManager.Singleton.gameObject.GetComponents<NetworkTransport>())
+        foreach (var ut in net.gameObject.GetComponents<NetworkTransport>())
             Destroy(ut);
 
-        var bt = gameObject.AddComponent<BluetoothTransport>();
-         
-        bt.OverrideExistingConnection(connectionId, 0);
-         
-        net.NetworkConfig.NetworkTransport = bt;
-        net.StartClient();
-         
+        currentTransport = gameObject.AddComponent<BluetoothTransport>();
+        currentTransport.OnClientDisconnected += Bt_OnClientDisconnected;
+        currentTransport.OverrideExistingConnection(
+            connectionId,
+            isHost ? 1UL : 0UL
+        );
+        net.NetworkConfig.NetworkTransport = currentTransport;
+
+        if (isHost)
+            net.StartHost();
+        else
+            net.StartClient();
+
         OnConnectionEstablished?.Invoke();
     }
 
+    private void Bt_OnClientDisconnected()
+    { 
+        Initialize(isServer);
+
+        if (currentTransport != null)
+        {
+            currentTransport.OnClientDisconnected -= Bt_OnClientDisconnected;
+        }
+    }
 }

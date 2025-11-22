@@ -20,15 +20,14 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-
+ 
 using System;
 using System.Collections.Generic;
-using System.Text;
 using Unity.Netcode;
 using UnityEngine;
 
 public class BluetoothTransport : NetworkTransport
-{ 
+{
     [SerializeField] private float outageGracePeriod = 5f; // secondi prima di inviare Disconnect esplicito
     [SerializeField] public uint TickRate = 40;   // Config per Netcode 
     public static readonly int MaxOutgoingQueue = 128;
@@ -38,15 +37,17 @@ public class BluetoothTransport : NetworkTransport
     public override ulong ServerClientId => 0;
     public override bool IsSupported => Application.platform == RuntimePlatform.Android;
 
+    public event Action OnClientDisconnected;
 
-    int connectionId = -1;
+
+    public int connectionId = -1;
     bool connected = false;
     bool connectEventSent = false;
     private float outageStartTime = -1f;   // timestamp in realtimeSinceStartup quando è iniziata la perdita
     private bool disconnectSent = false;   // true se abbiamo già inviato NetworkEvent.Disconnect
     private BluetoothTransport instance;
     private readonly Queue<OutPacket> outgoing = new();
-    private readonly Queue<OutPacket> outgoingCritical = new(); 
+    private readonly Queue<OutPacket> outgoingCritical = new();
     private int bytesSentThisFrame = 0;
     private struct OutPacket
     {
@@ -61,7 +62,7 @@ public class BluetoothTransport : NetworkTransport
     }
 
 
-     
+
     public void Awake()
     {
         if (instance != null)
@@ -74,8 +75,8 @@ public class BluetoothTransport : NetworkTransport
 
     public override void Initialize(NetworkManager networkManager = null)
     {
-        var config = NetworkManager.Singleton.NetworkConfig; 
-        config.TickRate = TickRate; 
+        var config = NetworkManager.Singleton.NetworkConfig;
+        config.TickRate = TickRate;
     }
 
     // Modifica OverrideExistingConnection: aggiorna stato e ferma eventuale reconnect in corso
@@ -86,7 +87,7 @@ public class BluetoothTransport : NetworkTransport
         this.RemotePeerId = remotepeerId;
         this.connectionId = connId;
         this.connected = connId > 0;
-        this.connectEventSent = false; 
+        this.connectEventSent = false;
         outgoing.Clear();
         outgoingCritical.Clear();
         bytesSentThisFrame = 0;
@@ -94,10 +95,10 @@ public class BluetoothTransport : NetworkTransport
         disconnectSent = false;
 
         Debug.Log($"[BT Transport] OverrideExistingConnection -> connId={connectionId}, connected={connected}");
-    } 
+    }
 
     // property: meglio usare 0 come ServerClientId (convenzionale in Netcode)
- 
+
     public override NetworkEvent PollEvent(out ulong clientId, out ArraySegment<byte> payload, out float receiveTime)
     {
         clientId = 0;
@@ -125,7 +126,7 @@ public class BluetoothTransport : NetworkTransport
             clientId = this.RemotePeerId;
             return NetworkEvent.Connect;
         }
-         
+
         try
         {
             FlushOutgoing();
@@ -136,7 +137,7 @@ public class BluetoothTransport : NetworkTransport
             byte[] msg = BluetoothServerWrapper.ReadMessage(connectionId);
 
             if (msg != null && msg.Length > 0)
-            { 
+            {
                 payload = new ArraySegment<byte>(msg);
                 clientId = this.RemotePeerId;
                 return NetworkEvent.Data;
@@ -154,11 +155,11 @@ public class BluetoothTransport : NetworkTransport
 
             if (outageStartTime < 0f)
                 outageStartTime = Time.realtimeSinceStartup;
-             
+
             return NetworkEvent.Nothing;
         }
     }
-     
+
 
     public override bool StartClient()
     {
@@ -173,7 +174,7 @@ public class BluetoothTransport : NetworkTransport
         Debug.LogWarning("[BT Transport] StartServer called but no existing connectionId. StartServer returns false.");
         return false;
     }
- 
+
     public override void Send(ulong clientId, ArraySegment<byte> data, NetworkDelivery delivery)
     {
         if (!connected || connectionId <= 0) return;
@@ -197,7 +198,7 @@ public class BluetoothTransport : NetworkTransport
         if (critical) outgoingCritical.Enqueue(new OutPacket(bytes, true));
         else outgoing.Enqueue(new OutPacket(bytes, false));
     }
-     
+
     private void FlushOutgoing()
     {
         if (!connected || connectionId <= 0) return;
@@ -233,12 +234,19 @@ public class BluetoothTransport : NetworkTransport
         }
     }
 
-  
+
+    public void DisposeConnection(int connectId)
+    {
+        if (connectionId == connectId)
+        {
+            Dispose();
+        }
+    }
 
     // Assicurarsi che Shutdown/Disconnect puliscano reconnectCoroutine
     public override void DisconnectRemoteClient(ulong clientId)
     {
-        if(this.RemotePeerId == clientId) 
+        if (this.RemotePeerId == clientId)
             Dispose();
     }
     public override void DisconnectLocalClient() => Dispose();
@@ -247,15 +255,16 @@ public class BluetoothTransport : NetworkTransport
     private void Dispose()
     {
         Debug.Log("[BT Transport] Disposing connection");
-
         if (connected && connectionId > 0) BluetoothServerWrapper.CloseConnection(connectionId);
         connected = false;
         connectionId = -1;
-        this.RemotePeerId = 0; 
+        this.RemotePeerId = 0;
         outageStartTime = -1f;
         disconnectSent = false;
         outgoing.Clear();
         outgoingCritical.Clear();
+
+        OnClientDisconnected?.Invoke();
     }
 
     public override ulong GetCurrentRtt(ulong clientId) => 0;

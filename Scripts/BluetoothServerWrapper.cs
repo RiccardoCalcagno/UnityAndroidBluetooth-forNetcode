@@ -27,7 +27,7 @@ using UnityEngine;
 
 public static class BluetoothServerWrapper
 {
-    private const string PLUGIN_CLASS = "com.relaxinvr.bluetooth.BluetoothPlugin";
+    private const string PLUGIN_CLASS = "com.example.bluetooth.BluetoothPlugin";
     private static AndroidJavaClass pluginClass;
 
 
@@ -46,7 +46,7 @@ public static class BluetoothServerWrapper
         return result;
     }
 
-    static BluetoothServerWrapper()
+    public static void LoadPlugin()
     {
 #if UNITY_ANDROID && !UNITY_EDITOR
         pluginClass = new AndroidJavaClass(PLUGIN_CLASS);

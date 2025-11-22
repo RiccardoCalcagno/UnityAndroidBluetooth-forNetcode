@@ -15,7 +15,7 @@ Below are the key folders and files included in this package:
   - [`Manifest_and_gradle_configs.txt`](Plugin/Manifest_and_gradle_configs.txt): Required lines for Android manifest and Gradle templates
   - `SourceCode_plugin.java`: Source code for rebuilding the .aar plugin
   - `build.gradle.kts`: Reference Gradle configuration for plugin reconstruction
-- [`Scripts`](Scripts): C# scripts for integrating the Bluetooth transport into your Unity project, including an example of partial implementation [`BTforNetcodeExample.cs`](Scripts/BTforNetcodeExample.cs)
+- [`Scripts`](Scripts): C# scripts for integrating the Bluetooth transport into your Unity project with Netcode integration, including an example of partial implementation [`BTforNetcodeExample.cs`](Scripts/BTforNetcodeExample.cs)
 
 ---
 
